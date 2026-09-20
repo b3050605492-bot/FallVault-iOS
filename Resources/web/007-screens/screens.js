@@ -1002,21 +1002,84 @@ function hmacSha1(key, msg) {
   const inner = sha1Bytes(new Uint8Array([...ipad, ...msg]));
   return sha1Bytes(new Uint8Array([...opad, ...inner]));
 }
-// 生成当前 6 位验证码（secret=base32 密钥，offset=秒级时间校正）
+// ===== 验证码参数解析 =====
+// PC 端的密钥可能是「纯 base32」也可能是「完整 otpauth:// 链接」（Google 迁移导入的格式，
+// 可能带 SHA256/SHA512、8 位码、自定义周期）—— 必须按链接里的参数生成，否则与 PC 端不同码。
+const OTP_PARSE_CACHE = {};
+function otpParams(str) {
+  const raw = String(str == null ? '' : str).trim();
+  if (OTP_PARSE_CACHE[raw]) return OTP_PARSE_CACHE[raw];
+  let out = { secret: raw, algo: 'SHA-1', digits: 6, period: 30 };
+  if (/^otpauth:\/\//i.test(raw)) {
+    try {
+      const u = new URL(raw);
+      const sec = u.searchParams.get('secret') || '';
+      let al = (u.searchParams.get('algorithm') || 'SHA1').toUpperCase();
+      al = al.indexOf('256') >= 0 ? 'SHA-256' : (al.indexOf('512') >= 0 ? 'SHA-512' : 'SHA-1');
+      out = {
+        secret: sec,
+        algo: al,
+        digits: parseInt(u.searchParams.get('digits') || '6', 10) || 6,
+        period: parseInt(u.searchParams.get('period') || '30', 10) || 30,
+      };
+    } catch (e) {}
+  }
+  OTP_PARSE_CACHE[raw] = out;
+  return out;
+}
+// 窗口计数（按 period 换算，支持非 30 秒周期）
+function otpCounter(period, offset) {
+  const now = Date.now() / 1000 + (Number(offset) || 0);
+  return { counter: Math.floor(now / period), t0: now };
+}
+function otpTruncate(h, digits) {
+  const off = h[h.length - 1] & 0x0f;
+  const bin = ((h[off] & 0x7f) << 24) | (h[off + 1] << 16) | (h[off + 2] << 8) | h[off + 3];
+  return String(bin % Math.pow(10, digits)).padStart(digits, '0');
+}
+
+// SHA-1 路径（纯 JS 同步，绝大多数验证码走这里）
 function totpNow(secret, offset) {
   try {
-    const key = b32Decode(secret);
+    const pr = otpParams(secret);
+    const key = b32Decode(pr.secret);
     if (!key.length) return '------';
-    const t = Math.floor((Date.now() / 1000 + (Number(offset) || 0)) / 30);
+    const { counter } = otpCounter(pr.period, offset);
     const msg = new ArrayBuffer(8);
     const dv = new DataView(msg);
-    dv.setUint32(0, Math.floor(t / 0x100000000));
-    dv.setUint32(4, t >>> 0);
-    const h = hmacSha1(key, new Uint8Array(msg));
-    const off = h[h.length - 1] & 0x0f;
-    const bin = ((h[off] & 0x7f) << 24) | (h[off + 1] << 16) | (h[off + 2] << 8) | h[off + 3];
-    return String(bin % 1000000).padStart(6, '0');
+    dv.setUint32(0, Math.floor(counter / 0x100000000));
+    dv.setUint32(4, counter >>> 0);
+    return otpTruncate(hmacSha1(key, new Uint8Array(msg)), pr.digits);
   } catch (e) { return '------'; }
+}
+
+// SHA-256 / SHA-512 路径（Web Crypto 异步；结果按「周期+参数」缓存，避免重复计算）
+const OTP_ASYNC_CACHE = {};
+function totpAsync(secret, offset) {
+  try {
+    const pr = otpParams(secret);
+    if (pr.algo === 'SHA-1') return Promise.resolve(totpNow(secret, offset));
+    const key = b32Decode(pr.secret);
+    if (!key.length) return Promise.resolve('------');
+    const { counter } = otpCounter(pr.period, offset);
+    const cacheKey = pr.algo + '|' + pr.digits + '|' + pr.period + '|' + counter + '|' + secret;
+    if (OTP_ASYNC_CACHE[cacheKey]) return Promise.resolve(OTP_ASYNC_CACHE[cacheKey]);
+    const msg = new ArrayBuffer(8);
+    const dv = new DataView(msg);
+    dv.setUint32(0, Math.floor(counter / 0x100000000));
+    dv.setUint32(4, counter >>> 0);
+    return crypto.subtle.importKey('raw', key, { name: 'HMAC', hash: pr.algo }, false, ['sign'])
+      .then(k => crypto.subtle.sign('HMAC', k, new Uint8Array(msg)))
+      .then(sig => {
+        const code = otpTruncate(new Uint8Array(sig), pr.digits);
+        // 缓存只保留最近 40 条（跨窗口自动失效）
+        const keys = Object.keys(OTP_ASYNC_CACHE);
+        if (keys.length > 40) delete OTP_ASYNC_CACHE[keys[0]];
+        OTP_ASYNC_CACHE[cacheKey] = code;
+        return code;
+      })
+      .catch(() => '------');
+  } catch (e) { return Promise.resolve('------'); }
 }
 
 function renderTOTP() {
@@ -1027,7 +1090,20 @@ function renderTOTP() {
   if (!items.length) { box.innerHTML = '<div class="empty">没有匹配的验证码</div>'; vsUpdate('vscT'); return; }
   // 全量渲染（同密码库：右侧滚动滑块）
   box.innerHTML = items.map(it => {
-    if (!it.code) it.code = totpNow(it.s, it.offset);
+    if (!it.code) {
+      const pr0 = otpParams(it.s);
+      if (pr0.algo === 'SHA-1') it.code = totpNow(it.s, it.offset);
+      else {
+        it.code = '······';
+        (function (item) {
+          totpAsync(item.s, item.offset).then(c => {
+            item.code = c;
+            const el = document.getElementById('code-' + item.key);
+            if (el) el.textContent = c;
+          });
+        })(it);
+      }
+    }
     // 关联账号：副标题显示"对应账号"(用户名/邮箱)，无则显示账号标题；图标按网站自动获取
     const acct = CARDS.find(c => c.totp && c.totp === it.key);
     const site = (acct && acct.site) ? acct.site : '';
@@ -1066,20 +1142,37 @@ function renderTOTP() {
 function tickTOTP() {
   const now = Date.now() / 1000 + totpOffset;   // totpOffset：设置里手动校正的时间偏移（秒）
   TOTP_ITEMS.forEach(it => {
-    const phase = (now + it.offset) % PERIOD;
-    const remain = PERIOD - phase;
-    const cycle = Math.floor((now + it.offset) / PERIOD);
-    const frac = remain / PERIOD;
+    const pr = otpParams(it.s);                   // 每条目自己的周期/算法/位数（otpauth 链接可能不同）
+    const period = pr.period || PERIOD;
+    const phase = (now + it.offset) % period;
+    const remain = period - phase;
+    const cycle = Math.floor((now + it.offset) / period);
+    const frac = remain / period;
     const expiring = remain <= 5;
 
     // 换新码：验证码页 + 密码库卡片 + 详情页 同步
     if (it.lastCycle !== cycle) {
       it.lastCycle = cycle;
-      it.code = totpNow(it.s, it.offset);   // 真 TOTP（与 PC 端同码）；无密钥显示 ------
-      const ce = document.getElementById('code-' + it.key);
-      if (ce) ce.textContent = it.code;
-      const mce0 = document.getElementById('mcode-' + it.key);
-      if (mce0) mce0.textContent = it.code;
+      if (pr.algo === 'SHA-1') {
+        it.code = totpNow(it.s, it.offset);     // 同步：绝大多数验证码
+        const ce = document.getElementById('code-' + it.key);
+        if (ce) ce.textContent = it.code;
+        const mce0 = document.getElementById('mcode-' + it.key);
+        if (mce0) mce0.textContent = it.code;
+      } else {
+        it.code = '······';                      // SHA256/512：异步算，先占位
+        const ce = document.getElementById('code-' + it.key);
+        if (ce) ce.textContent = it.code;
+        totpAsync(it.s, it.offset).then(code => {
+          it.code = code;
+          const c1 = document.getElementById('code-' + it.key);
+          if (c1) c1.textContent = code;
+          const c2 = document.getElementById('mcode-' + it.key);
+          if (c2) c2.textContent = code;
+          const c3 = document.getElementById('dcode-' + it.key);
+          if (c3) c3.textContent = code;
+        });
+      }
     }
 
     // 验证码页：倒计时圆环 + 秒数
