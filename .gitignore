@@ -1,0 +1,14 @@
+# Xcode / 构建产物
+build/
+DerivedData/
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+*.ipa
+Payload/
+
+# macOS
+.DS_Store
+
+# 本地临时
+*.log

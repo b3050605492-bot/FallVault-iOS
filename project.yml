@@ -1,0 +1,36 @@
+name: FallVault
+options:
+  bundleIdPrefix: com.fall
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+targets:
+  FallVault:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      # web/ 作为 folder reference 整个打进 bundle（保持目录结构，HTML 里的相对路径 ../bz/ 才走得通）
+      - path: Resources/web
+        type: folder
+        buildPhase: resources
+      # App 图标（电脑端 FallVault 同款）
+      - path: Resources/Assets.xcassets
+    settings:
+      base:
+        INFOPLIST_FILE: Resources/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.fall.fallvault
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # 免签名构建（CI 里没有证书）
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_REQUIRED: "NO"
+        CODE_SIGNING_ALLOWED: "NO"
+        CODE_SIGN_ENTITLEMENTS: ""
+        DEVELOPMENT_TEAM: ""
+        ENABLE_BITCODE: "NO"
+        ONLY_ACTIVE_ARCH: "NO"
