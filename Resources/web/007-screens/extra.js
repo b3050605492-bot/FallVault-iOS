@@ -2511,12 +2511,20 @@ function applyTint(src) {
 function openTotpOffset() {
   const r = document.getElementById('totpOffsetRange');
   if (r) r.value = totpOffset;
-  document.getElementById('totpOffsetVal').textContent = totpOffset + ' 秒';
+  document.getElementById('totpOffsetVal').textContent = (totpOffset > 0 ? '+' : '') + totpOffset + ' 秒';
+  const ct = document.getElementById('totpCalTime');
+  if (ct) {
+    try {
+      const t = parseInt(localStorage.getItem('fvTotpCalT') || '0', 10);
+      ct.textContent = t ? new Date(t).toLocaleString('zh-CN', { hour12: false }) : '尚未校准';
+    } catch (e) { ct.textContent = '尚未校准'; }
+  }
   document.getElementById('screenTotpOffset').classList.add('show');
 }
 function closeTotpOffset() { document.getElementById('screenTotpOffset').classList.remove('show'); }
 function setTotpOffset(v) {
   totpOffset = parseInt(v, 10) || 0;
+  try { localStorage.setItem('fvTotpOffset', String(totpOffset)); } catch (e) {}   // 落盘：重进软件仍生效
   document.getElementById('totpOffsetVal').textContent = (totpOffset > 0 ? '+' : '') + totpOffset + ' 秒';
   document.getElementById('totpOffsetHint').textContent = (totpOffset > 0 ? '+' : '') + totpOffset + ' 秒';
   TOTP_ITEMS.forEach(it => { it.lastCycle = -1; });   // 强制立刻换码，方便看效果
@@ -2525,6 +2533,77 @@ function resetTotpOffset() {
   setTotpOffset(0);
   const r = document.getElementById('totpOffsetRange'); if (r) r.value = 0;
   showToast('时间偏移已重置');
+}
+
+// ===== 自动校准：联网读取标准时间，算出本机偏差（无需手动调） =====
+let calibrating = false;
+function applyCalibration(serverMs, localMs) {
+  let off = Math.round((serverMs - localMs) / 1000);
+  off = Math.max(-30, Math.min(30, off));          // 夹在 ±30 秒（与手动档位一致）
+  setTotpOffset(off);
+  try { localStorage.setItem('fvTotpCalT', String(Date.now())); } catch (e) {}
+  const r = document.getElementById('totpOffsetRange');
+  if (r) r.value = off;
+  return off;
+}
+async function autoCalibrateTime(silent) {
+  if (calibrating) return null;
+  calibrating = true;
+  const report = (off) => {
+    calibrating = false;
+    if (!silent) {
+      showToast(off === 0 ? '时间已校准（本机准确）'
+        : ('已自动校准：本机时间' + (off > 0 ? '慢了 ' + off + ' 秒' : '快了 ' + (-off) + ' 秒') + '，已自动补偿'));
+    }
+    return off;
+  };
+  // 多源依次尝试（浏览器跨域只能读「允许 CORS 的 JSON 接口」，读不到普通站点的 Date 头）
+  const sources = [
+    // ① 淘宝时间接口（国内）
+    { url: 'https://api.m.taobao.com/rest/api3.do?api=mtop.common.getTimestamp',
+      pick: (j) => (j && j.data && j.data.t) ? Number(j.data.t) : 0 },
+    // ② 苏宁时间接口（国内）
+    { url: 'https://quan.suning.com/getSysTime.do',
+      pick: (j) => {
+        const s = j && (j.sysTime2 || j.sysTime1 || j.sysTime);
+        if (!s) return 0;
+        const t = new Date(String(s).replace(/-/g, '/')).getTime();
+        return isFinite(t) ? t : 0;
+      } },
+    // ③ 世界时间 API（海外，需代理）
+    { url: 'https://worldtimeapi.org/api/timezone/Etc/UTC',
+      pick: (j) => (j && j.unixtime) ? j.unixtime * 1000 : 0 },
+    // ④ timeapi.io（海外，需代理）
+    { url: 'https://timeapi.io/api/Time/current/zone?timeZone=UTC',
+      pick: (j) => {
+        if (!j || !j.dateTime) return 0;
+        const t = new Date(j.dateTime).getTime();
+        return isFinite(t) ? t : 0;
+      } },
+  ];
+  for (const src of sources) {
+    try {
+      const t0 = Date.now();
+      const r = await fetch(src.url, { cache: 'no-store' });
+      const t1 = Date.now();
+      if (!r.ok) continue;
+      const j = await r.json();
+      const serverMs = src.pick(j);
+      if (serverMs > 0) {
+        return report(applyCalibration(serverMs, Math.round((t0 + t1) / 2)));   // 往返中点补偿
+      }
+    } catch (e) { /* 换下一个源 */ }
+  }
+  calibrating = false;
+  if (!silent) showToast('校准失败（网络不可达；可手动调整，设置会保存）');
+  return null;
+}
+// 启动/进验证码页时静默校准（12 小时最多一次）
+function maybeAutoCalibrate() {
+  try {
+    const t = parseInt(localStorage.getItem('fvTotpCalT') || '0', 10);
+    if (Date.now() - t > 12 * 3600 * 1000) autoCalibrateTime(true);
+  } catch (e) {}
 }
 
 // ===== 设置项交互（演示反馈） =====
@@ -2540,6 +2619,8 @@ function settingTap(name) {
 })();
 // 启动：先加载本地持久化数据（刷新不还原演示数据）
 try { loadCardsData(); } catch (e) {}
+// 后台静默校准验证码时间（12 小时最多一次；失败静默跳过，不影响使用）
+setTimeout(() => { try { maybeAutoCalibrate(); } catch (e) {} }, 2500);
 // 打开即呈现锁屏：自动聚焦密码框 + 自动尝试一次 Face ID
 wallFancy('bz2.jpg', 'BZ2');   // 启动默认壁纸：网络优先→本地回退；设置背景图+玻璃染色
 lockInit(true);

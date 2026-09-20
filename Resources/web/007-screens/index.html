@@ -1471,10 +1471,12 @@
       <div class="ntitle">TOTP 时间偏移校正</div>
     </div>
     <div class="body">
-      <div class="dsec">验证码总是早/晚几秒失效，说明本机时间与服务器有偏差。这里手动补偿（-30 ~ +30 秒），对所有验证码生效。</div>
+      <div class="dsec">验证码总是早/晚几秒失效，说明本机时间与服务器有偏差。点下面「自动校准」联网读取标准时间自动补偿；也可以手动微调（-30 ~ +30 秒）。设置会保存，重进软件仍生效。</div>
       <div class="group" style="margin-top:4px">
         <div class="drow"><span class="dk">当前偏移</span><span class="dv" id="totpOffsetVal" style="color:#64D2FF">0 秒</span></div>
+        <div class="drow"><span class="dk">上次校准</span><span class="dv" id="totpCalTime" style="color:rgba(255,255,255,.6);font-size:13px">—</span></div>
       </div>
+      <div class="del-row" style="margin-top:10px;background:linear-gradient(135deg,rgba(100,210,255,.22),rgba(90,200,250,.14));color:#fff;border:0.5px solid rgba(100,210,255,.45)" onclick="autoCalibrateTime(false)">⚡ 自动校准（联网读取标准时间）</div>
       <input type="range" id="totpOffsetRange" min="-30" max="30" step="1" value="0" class="slider" oninput="setTotpOffset(this.value)">
       <div class="slider-marks"><span>-30s</span><span>0</span><span>+30s</span></div>
       <div class="del-row" style="background:rgba(255,255,255,.1);color:#fff" onclick="resetTotpOffset()">重置为 0</div>

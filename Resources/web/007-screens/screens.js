@@ -936,6 +936,7 @@ function swipeAct(e, idx, act) {
 const TOTP_ITEMS = [];   // 无内置测试验证码
 const PERIOD = 30;
 let totpOffset = 0;   // TOTP 时间偏移校正（秒），设置 → 高级里调整
+try { totpOffset = parseInt(localStorage.getItem('fvTotpOffset') || '0', 10) || 0; } catch (e) {}   // 重进软件后仍生效
 const R = 11.5, CIRC = 2 * Math.PI * R;
 
 function randCode() {
@@ -1006,10 +1007,85 @@ function hmacSha1(key, msg) {
 // PC 端的密钥可能是「纯 base32」也可能是「完整 otpauth:// 链接」（Google 迁移导入的格式，
 // 可能带 SHA256/SHA512、8 位码、自定义周期）—— 必须按链接里的参数生成，否则与 PC 端不同码。
 const OTP_PARSE_CACHE = {};
+
+// ---- Google 迁移链接解析（otpauth-migration://offline?data=BASE64PROTOBUF）----
+// PC 端导入 Google 验证器时存的就是这种链接；iOS 必须解出里面的真实密钥，
+// 否则把整串链接当 base32 解码 → 与 PC 端完全不同码。
+function b64ToBytes(b64) {
+  const s = String(b64 || '').replace(/-/g, '+').replace(/_/g, '/');
+  const pad = s + '='.repeat((4 - (s.length % 4)) % 4);
+  const bin = atob(pad);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+function protoVarint(b, pos) {
+  let result = 0, shift = 0, p = pos;
+  while (p < b.length) {
+    const byte = b[p]; result |= (byte & 0x7f) << shift; p++;
+    if ((byte & 0x80) === 0) break;
+    shift += 7;
+  }
+  return [result >>> 0, p];
+}
+function protoFields(b) {
+  const out = []; let pos = 0;
+  while (pos < b.length) {
+    let tag; const r0 = protoVarint(b, pos); tag = r0[0]; pos = r0[1];
+    const fieldNo = tag >> 3, wireType = tag & 7;
+    if (wireType === 0) { const r1 = protoVarint(b, pos); out.push({ tag: fieldNo, v: r1[0] }); pos = r1[1]; }
+    else if (wireType === 2) {
+      const r2 = protoVarint(b, pos); const len = r2[0]; pos = r2[1];
+      out.push({ tag: fieldNo, v: b.slice(pos, pos + len) }); pos += len;
+    } else break;
+  }
+  return out;
+}
+function bytesToB32(b) {
+  const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = '';
+  for (let i = 0; i < b.length; i++) bits += b[i].toString(2).padStart(8, '0');
+  let out = '';
+  for (let i = 0; i < bits.length; i += 5) out += A[parseInt(bits.slice(i, i + 5).padEnd(5, '0'), 2)];
+  return out;
+}
+function parseMigrationUri(uri) {
+  try {
+    const u = new URL(uri);
+    const data = u.searchParams.get('data');
+    if (!data) return [];
+    const buf = b64ToBytes(data);
+    const list = [];
+    protoFields(buf).forEach(f => {
+      if (f.tag !== 1 || !(f.v && f.v.length !== undefined)) return;   // otp_parameters
+      let secret = '', name = '', issuer = '', algo = 'SHA-1', digits = 6, period = 30;
+      protoFields(f.v).forEach(g => {
+        if (g.tag === 1 && g.v && g.v.length !== undefined) secret = bytesToB32(g.v);
+        else if (g.tag === 2 && g.v && g.v.length !== undefined) name = String.fromCharCode.apply(null, g.v);
+        else if (g.tag === 3 && g.v && g.v.length !== undefined) issuer = String.fromCharCode.apply(null, g.v);
+        else if (g.tag === 4) algo = g.v === 2 ? 'SHA-256' : (g.v === 3 ? 'SHA-512' : 'SHA-1');
+        else if (g.tag === 5) digits = g.v === 2 ? 8 : 6;
+        else if (g.tag === 7) period = g.v || 30;
+      });
+      if (secret) list.push({ secret: secret, name: name, issuer: issuer, algo: algo, digits: digits, period: period });
+    });
+    return list;
+  } catch (e) { return []; }
+}
+
 function otpParams(str) {
   const raw = String(str == null ? '' : str).trim();
   if (OTP_PARSE_CACHE[raw]) return OTP_PARSE_CACHE[raw];
   let out = { secret: raw, algo: 'SHA-1', digits: 6, period: 30 };
+  // Google 迁移链接：解出第一条的真实密钥与参数
+  if (/^otpauth-migration:\/\//i.test(raw)) {
+    const list = parseMigrationUri(raw);
+    if (list.length) {
+      out = { secret: list[0].secret, algo: list[0].algo, digits: list[0].digits, period: list[0].period };
+    }
+    OTP_PARSE_CACHE[raw] = out;
+    return out;
+  }
   if (/^otpauth:\/\//i.test(raw)) {
     try {
       const u = new URL(raw);
