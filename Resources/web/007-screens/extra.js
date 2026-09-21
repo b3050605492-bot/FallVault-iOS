@@ -1030,12 +1030,13 @@ function saveCardsData() {
     localStorage.setItem('fvCards', JSON.stringify(CARDS));
     localStorage.setItem('fvTotp', JSON.stringify(TOTP_ITEMS));
     localStorage.setItem('fvCardsTs', String(now));   // 时间戳：与沙盒文件比较取新者
+    if (wallCustomData) localStorage.setItem('fvWallCustom', wallCustomData);   // 自定义壁纸（小图能存则存）
   } catch (e) {}
   // 真机：同时写入沙盒文件（WKWebView localStorage 在 iOS 不稳定，文件最可靠）
   if (hasVaultBridge()) {
     try {
       window.webkit.messageHandlers.vaultSave.postMessage({
-        data: JSON.stringify({ cards: CARDS, totp: TOTP_ITEMS, ts: Date.now() }),
+        data: JSON.stringify({ cards: CARDS, totp: TOTP_ITEMS, ts: Date.now(), wallCustom: wallCustomData }),
       });
     } catch (e) {}
   }
@@ -1075,6 +1076,7 @@ function loadCardsData() {
     if (typeof renderTags === 'function') renderTags();
   } catch (e) {}
   // 真机：从沙盒文件加载（权威数据，晚于 localStorage 到达则覆盖）
+  restoreCustomWall();   // 本地缓存的壁纸先应用（沙盒数据到达后若有更新的会再覆盖）
   if (hasVaultBridge()) {
     window.__fvVaultLoaded = (json) => {
       try {
@@ -1087,6 +1089,11 @@ function loadCardsData() {
           CARDS.length = 0; CARDS.push(...d.cards);
           TOTP_ITEMS.length = 0;
           TOTP_ITEMS.push(...(Array.isArray(d.totp) ? d.totp : []));
+          if (d.wallCustom) {                                  // 自定义壁纸随数据一起恢复
+            wallCustomData = d.wallCustom;
+            try { localStorage.setItem('fvWallCustom', wallCustomData); } catch (e) {}
+            applyWallpaper('url(' + wallCustomData + ')', '自定义', true);
+          }
         }
         if (typeof renderCards === 'function') renderCards();
         if (typeof renderTOTP === 'function') renderTOTP();
@@ -2412,15 +2419,41 @@ function applyCrop() {
   const img = document.getElementById('cropImg');
   const outW = _cropCb ? _cropCb.w : WALL_TW;
   const outH = _cropCb ? _cropCb.h : WALL_TH;
+  // 源矩形（原图坐标系）：框左上角对应的原图位置 + 可见区域大小
+  const sx0 = -cropOff.x / k, sy0 = -cropOff.y / k, sw0 = s.w / k, sh0 = s.h / k;
+
+  // ① 超大图先缩到安全尺寸：iOS 上 iPhone 原图（4000×3000）直接画会因内存限制失败 → 输出全黑
+  const MAXS = 3072;
+  const sc = Math.min(1, MAXS / Math.max(cropNat.w || 1, cropNat.h || 1));
+  let srcEl = img, fit = 1;
+  if (sc < 1) {
+    try {
+      const mid = document.createElement('canvas');
+      mid.width = Math.max(1, Math.round(cropNat.w * sc));
+      mid.height = Math.max(1, Math.round(cropNat.h * sc));
+      const mctx = mid.getContext('2d');
+      mctx.imageSmoothingQuality = 'high';
+      mctx.drawImage(img, 0, 0, mid.width, mid.height);
+      srcEl = mid; fit = mid.width / cropNat.w;
+    } catch (e) { srcEl = img; fit = 1; }
+  }
+
+  // ② 输出画布（JPEG 无透明通道，未绘制区域会变成纯黑 → 先铺底色，任何情况下都不会整张黑）
   const c = document.createElement('canvas');
   c.width = outW; c.height = outH;
   const ctx = c.getContext('2d');
+  ctx.fillStyle = '#0b0b0d';
+  ctx.fillRect(0, 0, outW, outH);
   ctx.imageSmoothingQuality = 'high';
   // 翻转烘焙：镜像画布坐标系后再绘制（与裁剪界面的 scaleX/scaleY 预览完全一致）
   if (cropFlipH) { ctx.translate(outW, 0); ctx.scale(-1, 1); }
   if (cropFlipV) { ctx.translate(0, outH); ctx.scale(1, -1); }
-  // 框左上角对应到"原图坐标系"的位置，裁出可见区域
-  ctx.drawImage(img, -cropOff.x / k, -cropOff.y / k, s.w / k, s.h / k, 0, 0, outW, outH);
+  try {
+    ctx.drawImage(srcEl, sx0 * fit, sy0 * fit, sw0 * fit, sh0 * fit, 0, 0, outW, outH);
+  } catch (e) {
+    showToast('图片处理失败，请换一张图试试');
+    return;
+  }
   const out = c.toDataURL('image/jpeg', 0.85);
   if (_cropCb) {
     const cb = _cropCb; _cropCb = null;
@@ -2428,8 +2461,10 @@ function applyCrop() {
     cb.fn(out);
     return;
   }
-  pendingWall = out;
+  // 壁纸：存本地 + 存沙盒文件（重进软件仍生效）
+  wallCustomData = out;
   try { localStorage.setItem('fvWallCustom', out); } catch (e) {}
+  try { if (typeof saveCardsData === 'function') saveCardsData(); } catch (e) {}
   applyWallpaper('url(' + out + ')', '自定义');
   closeCrop(); closeWall();
   showToast('壁纸已应用 ✓');
@@ -2449,7 +2484,20 @@ function wallFancy(f, name) {
   applyWallpaper(RES_BZ + f, name);
   applyTint(RES_BZ + f);
 }
-function applyWallpaper(img, name) {
+// 自定义壁纸数据（base64 较大：localStorage 可能超限，主要靠沙盒文件持久化）
+let wallCustomData = '';
+// 启动时恢复自定义壁纸（localStorage → 沙盒文件）
+function restoreCustomWall(apply) {
+  let data = '';
+  try { data = localStorage.getItem('fvWallCustom') || ''; } catch (e) {}
+  if (!data) data = wallCustomData || '';
+  if (!data) return false;
+  wallCustomData = data;
+  if (apply !== false && typeof applyWallpaper === 'function') applyWallpaper('url(' + data + ')', '自定义', true);
+  return true;
+}
+
+function applyWallpaper(img, name, silent) {
   const phone = document.getElementById('phone');
   // dataURL（内嵌壁纸）必须包 url()，否则 background-image 整条无效
   const cssImg = /^url\(/i.test(img) ? img : "url('" + img + "')";
@@ -2460,7 +2508,7 @@ function applyWallpaper(img, name) {
   if (lbg) lbg.style.backgroundImage = cssImg;
   document.getElementById('wallHint').textContent = name;
   applyTint(img);   // 提取壁纸主色 → 给玻璃染色
-  showToast('壁纸：' + name);
+  if (!silent) showToast('壁纸：' + name);
 }
 
 // ===== 壁纸主色提取 → 玻璃染色（--tint）=====
