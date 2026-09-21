@@ -90,6 +90,9 @@ docs/                    开发笔记
 - 因遗忘主密码、设备丢失、误删数据造成的损失，作者不承担责任。
 - 界面与实现参考了个人使用习惯与公开的 iOS 设计规范；桌面版 FallVault 为独立项目。
 
+> **直接下载**：[FallVault.ipa（最新版）](https://github.com/b3050605492-bot/FallVault-iOS/releases/latest) —— 全部版本见 [Releases](https://github.com/b3050605492-bot/FallVault-iOS/releases)
+
+
 ## 🔗 其它平台
 
 同一套 `.fvault` 加密备份格式，三端数据互通。
