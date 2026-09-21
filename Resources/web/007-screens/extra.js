@@ -1036,7 +1036,7 @@ function saveCardsData() {
   if (hasVaultBridge()) {
     try {
       window.webkit.messageHandlers.vaultSave.postMessage({
-        data: JSON.stringify({ cards: CARDS, totp: TOTP_ITEMS, ts: Date.now(), wallCustom: wallCustomData }),
+        data: JSON.stringify({ cards: CARDS, totp: TOTP_ITEMS, ts: Date.now(), wallCustom: wallCustomData, wallState: wallState }),
       });
     } catch (e) {}
   }
@@ -1076,7 +1076,6 @@ function loadCardsData() {
     if (typeof renderTags === 'function') renderTags();
   } catch (e) {}
   // 真机：从沙盒文件加载（权威数据，晚于 localStorage 到达则覆盖）
-  restoreCustomWall();   // 本地缓存的壁纸先应用（沙盒数据到达后若有更新的会再覆盖）
   if (hasVaultBridge()) {
     window.__fvVaultLoaded = (json) => {
       try {
@@ -1089,11 +1088,15 @@ function loadCardsData() {
           CARDS.length = 0; CARDS.push(...d.cards);
           TOTP_ITEMS.length = 0;
           TOTP_ITEMS.push(...(Array.isArray(d.totp) ? d.totp : []));
-          if (d.wallCustom) {                                  // 自定义壁纸随数据一起恢复
+          if (d.wallState && d.wallState.type) {                // 壁纸类型随数据恢复
+            wallState = d.wallState;
+            try { localStorage.setItem('fvWallState', JSON.stringify(wallState)); } catch (e) {}
+          }
+          if (d.wallCustom) {
             wallCustomData = d.wallCustom;
             try { localStorage.setItem('fvWallCustom', wallCustomData); } catch (e) {}
-            applyWallpaper('url(' + wallCustomData + ')', '自定义', true);
           }
+          restoreWall();                                        // 按记录的类型恢复（内置/自定义）
         }
         if (typeof renderCards === 'function') renderCards();
         if (typeof renderTOTP === 'function') renderTOTP();
@@ -2441,16 +2444,22 @@ function applyCrop() {
   }
   // 壁纸：存本地 + 存沙盒文件（重进软件仍生效）
   wallCustomData = out;
+  wallState = { type: 'custom', idx: -1, name: '自定义' };
   try { localStorage.setItem('fvWallCustom', out); } catch (e) {}
-  try { if (typeof saveCardsData === 'function') saveCardsData(); } catch (e) {}
+  saveWallState();   // 记类型 + 存沙盒文件
   applyWallpaper('url(' + out + ')', '自定义');
   closeCrop(); closeWall();
   showToast('壁纸已应用 ✓');
 }
 function setWall(i) {
   wallIdx = i;
+  // 选内置壁纸 = 不再使用自定义 → 必须清掉自定义记录，否则重启又被它覆盖
+  wallCustomData = '';
+  try { localStorage.removeItem('fvWallCustom'); } catch (e) {}
+  wallState = { type: 'builtin', idx: i, name: WALLPAPERS[i].n };
   wallFancy(WALLPAPERS[i].f, WALLPAPERS[i].n);
   renderWallGrid();
+  saveWallState();
 }
 // 壁纸一律走这：内嵌 base64（App 自带，永不失效）优先 → 本地 bz/ 资源兜底。背景与染色都用它
 function wallFancy(f, name) {
@@ -2464,15 +2473,42 @@ function wallFancy(f, name) {
 }
 // 自定义壁纸数据（base64 较大：localStorage 可能超限，主要靠沙盒文件持久化）
 let wallCustomData = '';
-// 启动时恢复自定义壁纸（localStorage → 沙盒文件）
-function restoreCustomWall(apply) {
+// 用户最后选的壁纸类型：{ type: 'builtin'|'custom', idx, name } —— 决定重启后恢复哪张
+let wallState = { type: '', idx: 0, name: '' };
+try {
+  const _ws = JSON.parse(localStorage.getItem('fvWallState') || 'null');
+  if (_ws && _ws.type) wallState = _ws;
+} catch (e) {}
+function saveWallState() {
+  try { localStorage.setItem('fvWallState', JSON.stringify(wallState)); } catch (e) {}
+  try { if (typeof saveCardsData === 'function') saveCardsData(); } catch (e) {}
+}
+// 启动时按「用户最后选的壁纸」恢复（内置 or 自定义）—— 不能无条件套自定义壁纸
+function restoreWall(apply) {
+  if (apply === false) return false;
   let data = '';
   try { data = localStorage.getItem('fvWallCustom') || ''; } catch (e) {}
   if (!data) data = wallCustomData || '';
-  if (!data) return false;
-  wallCustomData = data;
-  if (apply !== false && typeof applyWallpaper === 'function') applyWallpaper('url(' + data + ')', '自定义', true);
-  return true;
+  const st = wallState || {};
+  if (st.type === 'custom') {
+    if (!data) return false;
+    wallCustomData = data;
+    if (typeof applyWallpaper === 'function') applyWallpaper('url(' + data + ')', '自定义', true);
+    return true;
+  }
+  if (st.type === 'builtin' && typeof WALLPAPERS !== 'undefined' && WALLPAPERS[st.idx]) {
+    wallIdx = st.idx;
+    if (typeof wallFancy === 'function') wallFancy(WALLPAPERS[st.idx].f, WALLPAPERS[st.idx].n);
+    try { renderWallGrid(); } catch (e) {}
+    return true;
+  }
+  // 旧数据兜底：没有类型记录时，只有自定义图才恢复它
+  if (data) {
+    wallCustomData = data;
+    if (typeof applyWallpaper === 'function') applyWallpaper('url(' + data + ')', '自定义', true);
+    return true;
+  }
+  return false;
 }
 
 function applyWallpaper(img, name, silent) {
@@ -2648,7 +2684,10 @@ try { loadCardsData(); } catch (e) {}
 // 后台静默校准验证码时间（12 小时最多一次；失败静默跳过，不影响使用）
 setTimeout(() => { try { maybeAutoCalibrate(); } catch (e) {} }, 2500);
 // 打开即呈现锁屏：自动聚焦密码框 + 自动尝试一次 Face ID
-wallFancy('bz2.jpg', 'BZ2');   // 启动默认壁纸：网络优先→本地回退；设置背景图+玻璃染色
+// 启动壁纸：优先按用户记录恢复（内置/自定义）；只有从未设过壁纸时才用默认 BZ2
+let _wallRestored = false;
+try { _wallRestored = restoreWall(); } catch (e) {}
+if (!_wallRestored) wallFancy('bz2.jpg', 'BZ2');   // 首次启动：默认壁纸
 lockInit(true);
 // 预热人脸模型：第一次 Face ID 验证要加载 3 个模型（约 8MB），
 // 冷加载会让首次识别"卡"几秒；这里启动后后台异步加载，首次验证时模型已在内存
