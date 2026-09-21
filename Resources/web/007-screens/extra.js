@@ -1694,6 +1694,8 @@ function iosToPc(payload) {
       tag_ids: [],
       attachments: undefined,
     })),
+    // iOS 专属：银行卡随备份一起交给桌面版保管（桌面版不显示，但会原样透传回来）
+    bankCards: (payload.bankCards || []),
   };
 }
 function pcToIos(pc) {
@@ -1958,7 +1960,7 @@ async function restoreFromGhRun(pw, picked) {
     let iData;
     if (parsed && parsed.fvault === 1) {
       const pc = await fvEnvelopeDecrypt(pw, text);
-      iData = { cards: pcToIos(pc).cards, totp: pcToIos(pc).totp, tags: pcToIos(pc).tags };
+      iData = pcToIos(pc);   // 含 bankCards：从 PC 备份恢复时把 iOS 卡片带回来
     } else {
       iData = await fvDecryptJSON(pw, text);
     }
@@ -2166,7 +2168,7 @@ function doRestore() {
         const parsed = JSON.parse(text);
         if (parsed && parsed.fvault === 1) {                     // PC/新版信封格式
           const pc = await fvEnvelopeDecrypt(pw, text);
-          data = { cards: pcToIos(pc).cards, totp: pcToIos(pc).totp, tags: pcToIos(pc).tags };
+          data = pcToIos(pc);   // 含 bankCards：从 PC 备份恢复时把 iOS 卡片带回来
         } else {                                                 // 旧 iOS 直解格式
           data = await fvDecryptJSON(pw, text);
         }
