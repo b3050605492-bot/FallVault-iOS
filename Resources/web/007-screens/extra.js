@@ -1686,7 +1686,7 @@ function iosToPc(payload) {
       website: c.site || '',
       notes: c.note || '',
       totp_secret: totpMap[c.totp] || '',
-      icon: '',
+      icon: (c.icon && /^(https?:|data:|\/)/.test(c.icon)) ? c.icon : '',   // 卡片图标是 URL，原样带回（否则往返后图标全没）
       folder_id: null,
       is_favorite: !!c.fav,
       created_at: '',
@@ -2007,24 +2007,55 @@ function buildBackupPayload() {
   return {
     v: 1, ts: Date.now(), platform: 'ios',
     cards: CARDS,
-    totp: TOTP_ITEMS.map(t => ({ t: t.t, s: t.s, cat: t.cat, fav: t.fav })),   // 密钥在密文内，安全
+    totp: TOTP_ITEMS.map(t => ({ key: t.key, t: t.t, s: t.s, cat: t.cat, fav: t.fav })),   // key 必须带：导出时靠它关联卡片，否则验证码密钥全丢
     tags: TAGS,
     bankCards: (typeof BANK_CARDS !== 'undefined' ? BANK_CARDS : []),
   };
 }
 function applyBackupData(data) {
-  if (data.cards && Array.isArray(data.cards)) { CARDS.length = 0; CARDS.push(...data.cards); }
-  if (data.totp && Array.isArray(data.totp)) { TOTP_ITEMS.length = 0; TOTP_ITEMS.push(...data.totp); }
-  if (data.tags && Array.isArray(data.tags)) {
-    TAGS.length = 0;
-    TAGS.push({ id: 'all', name: '全部', icon: '', fixed: true });
-    TAGS.push({ id: 'fav', name: '收藏', icon: '', fixed: true });
-    TAGS.push(...data.tags);   // 动态标签（PC/iOS 都只有动态部分）
+  // 合并去重（与桌面版行为一致）：恢复第二个备份是「追加」，不是覆盖。
+  // 桌面版恢复用明文字段比对去重；这里同样用明文比较，重复条目跳过。
+  let addedCards = 0, skippedCards = 0, addedTotp = 0, skippedTotp = 0, addedBank = 0, skippedBank = 0;
+
+  if (data.cards && Array.isArray(data.cards)) {
+    data.cards.forEach(c => {
+      const dup = CARDS.some(x =>
+        (x.t || '') === (c.t || '') && (x.user || '') === (c.user || '') &&
+        (x.pass || '') === (c.pass || '') && (x.site || '') === (c.site || ''));
+      if (dup) { skippedCards++; return; }
+      CARDS.push(c); addedCards++;
+    });
   }
+
+  if (data.totp && Array.isArray(data.totp)) {
+    data.totp.forEach(t => {
+      const dup = TOTP_ITEMS.some(x => (x.t || '') === (t.t || '') && (x.s || '') === (t.s || ''));
+      if (dup) { skippedTotp++; return; }
+      TOTP_ITEMS.push(t); addedTotp++;
+    });
+  }
+
+  // 标签：按名称合并（固定标签 全部/收藏 始终保留在最前）
+  if (!TAGS.some(x => x.id === 'all')) TAGS.unshift({ id: 'all', name: '全部', icon: '', fixed: true });
+  if (!TAGS.some(x => x.id === 'fav')) TAGS.splice(1, 0, { id: 'fav', name: '收藏', icon: '', fixed: true });
+  if (data.tags && Array.isArray(data.tags)) {
+    data.tags.forEach(tg => {
+      if (!tg || !tg.name) return;
+      if (TAGS.some(x => x.name === tg.name)) return;   // 同名标签不重复添加
+      TAGS.push(tg);
+    });
+  }
+
+  // 银行卡：按卡号 + 组织去重
   if (data.bankCards && typeof BANK_CARDS !== 'undefined' && Array.isArray(data.bankCards)) {
-    BANK_CARDS.length = 0; BANK_CARDS.push(...data.bankCards);
+    data.bankCards.forEach(bc => {
+      const dup = BANK_CARDS.some(x => (x.num || '') === (bc.num || '') && (x.org || '') === (bc.org || ''));
+      if (dup) { skippedBank++; return; }
+      BANK_CARDS.push(bc); addedBank++;
+    });
     try { saveBankCards(); } catch (e) {}
   }
+
   saveCardsData();   // 双保险：localStorage + 沙盒文件桥（iOS localStorage 不可靠，重开不丢）
   try { if (typeof saveTags === 'function') saveTags(); else localStorage.setItem('fvTags', JSON.stringify(TAGS)); } catch (e) {}
   // 渲染放空闲期执行（不阻塞恢复完成时的手指交互——数据多时 renderCards/FLIP 同步跑会卡住点击）
@@ -2039,7 +2070,11 @@ function applyBackupData(data) {
   });
   // 恢复后强制回到密码库视图，确保用户直接看到数据
   try { switchVault('pw'); closeDetail(); closeRestore(); } catch (e) {}
-  return ((data.cards || []).length + ' 条密码 / ' + (data.totp || []).length + ' 条验证码 / ' + ((data.bankCards || []).length) + ' 张银行卡');
+
+  let msg = '新增 ' + addedCards + ' 条密码 / ' + addedTotp + ' 条验证码 / ' + addedBank + ' 张银行卡';
+  const skippedTotal = skippedCards + skippedTotp + skippedBank;
+  if (skippedTotal > 0) msg += '（跳过 ' + skippedTotal + ' 条已存在）';
+  return msg;
 }
 function openExport() {
   document.getElementById('exportCount').textContent = CARDS.length + ' 条';
