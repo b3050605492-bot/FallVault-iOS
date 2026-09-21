@@ -2317,34 +2317,18 @@ function cropClamp() {                    // 图片必须始终盖满框 → 偏
   cropOff.x = Math.max(Math.min(0, s.w - w), Math.min(0, cropOff.x));
   cropOff.y = Math.max(Math.min(0, s.h - h), Math.min(0, cropOff.y));
 }
-let cropFlipH = false, cropFlipV = false;   // 裁剪界面里的图片翻转（应用时烘焙进输出图）
-function cropFlip(axis) {
-  if (axis === 'h') cropFlipH = !cropFlipH;
-  else if (axis === 'v') cropFlipV = !cropFlipV;
-  else { cropFlipH = false; cropFlipV = false; }   // 重置方向
-  cropRender();
-  const b = document.getElementById('cropFlipHint');
-  if (b) b.textContent = (cropFlipH ? '水平已翻转' : '') + (cropFlipH && cropFlipV ? ' · ' : '') + (cropFlipV ? '垂直已翻转' : '');
-}
-
 function cropRender() {
   const img = document.getElementById('cropImg');
   const k = cropBase * cropScale;
   img.style.width = (cropNat.w * k) + 'px';
   img.style.height = (cropNat.h * k) + 'px';
   // 先镜像（以元素中心为原点）再平移 —— 与最终烘焙的 canvas 变换一致
-  let tf = 'translate(' + cropOff.x + 'px,' + cropOff.y + 'px)';
-  if (cropFlipH) tf += ' scaleX(-1)';
-  if (cropFlipV) tf += ' scaleY(-1)';
-  img.style.transform = tf;
+  img.style.transform = 'translate(' + cropOff.x + 'px,' + cropOff.y + 'px)';
   const z = document.getElementById('cropZoom');
   if (z) z.value = Math.round(cropScale * 100);
 }
 function openCrop(dataURL) {
   cropImgURL = dataURL;
-  cropFlipH = false; cropFlipV = false;   // 每次打开重置方向（hint 也清空）
-  const hEl = document.getElementById('cropFlipHint');
-  if (hEl) hEl.textContent = '';
   const ov = document.getElementById('cropOverlay');
   ov.classList.add('show');
   const img = document.getElementById('cropImg');
@@ -2368,9 +2352,6 @@ function closeCrop() {
 }
 function resetCrop() {
   const s = cropStageSize();
-  cropFlipH = false; cropFlipV = false;   // 重置也恢复到原方向
-  const hEl = document.getElementById('cropFlipHint');
-  if (hEl) hEl.textContent = '';
   cropScale = 1;
   cropOff = { x: (s.w - cropNat.w * cropBase) / 2, y: (s.h - cropNat.h * cropBase) / 2 };
   cropClamp(); cropRender();
@@ -2445,9 +2426,6 @@ function applyCrop() {
   ctx.fillStyle = '#0b0b0d';
   ctx.fillRect(0, 0, outW, outH);
   ctx.imageSmoothingQuality = 'high';
-  // 翻转烘焙：镜像画布坐标系后再绘制（与裁剪界面的 scaleX/scaleY 预览完全一致）
-  if (cropFlipH) { ctx.translate(outW, 0); ctx.scale(-1, 1); }
-  if (cropFlipV) { ctx.translate(0, outH); ctx.scale(1, -1); }
   try {
     ctx.drawImage(srcEl, sx0 * fit, sy0 * fit, sw0 * fit, sh0 * fit, 0, 0, outW, outH);
   } catch (e) {
@@ -2790,7 +2768,7 @@ function orgBadge(c) {
 }
 function bankCardEl(c, i) {
   const pal = BANK_PALETTES[c.pal % BANK_PALETTES.length] || BANK_PALETTES[0];
-  const face = c.face ? faceImgTag(c.face, c.flipH, c.flipV) : '';
+  const face = c.face ? faceImgTag(c.face) : '';
   const bg = c.face ? '' : `background: linear-gradient(152deg, ${pal.a} 0%, ${pal.b} 62%, ${pal.c} 130%);`;
   return `<div class="bcard2" data-i="${i}" style="${bg}" onclick="bankCardTap(${i})">
     ${face}
@@ -2881,7 +2859,7 @@ function bankDetail() {
   const editBtn = document.getElementById('detailEditBtn');
   editBtn.onclick = () => openBankForm(c.id);
   const pal = BANK_PALETTES[c.pal % BANK_PALETTES.length] || BANK_PALETTES[0];
-  const face = c.face ? faceImgTag(c.face, c.flipH, c.flipV) : '';
+  const face = c.face ? faceImgTag(c.face) : '';
   const bg = c.face ? '' : `background: linear-gradient(152deg, ${pal.a} 0%, ${pal.b} 62%, ${pal.c} 130%);`;
   const orgTxt = c.orgLabel || ORG_LABEL[c.org] || 'BANK CARD';
   document.getElementById('detailBody').innerHTML = `
@@ -2937,17 +2915,12 @@ function dBCvvToggle() {
 
 
 let bfFace = '';   // 自传卡面图（dataURL）
-let bfFlipH = false, bfFlipV = false;   // 卡面图翻转状态（水平/垂直）
 
-// 卡面图统一生成：把翻转状态写进 transform（预览/画廊/详情三处共用）
-function faceImgTag(src, flipH, flipV, extraStyle) {
-  const tf = [];
-  if (flipH) tf.push('scaleX(-1)');
-  if (flipV) tf.push('scaleY(-1)');
-  const style = (tf.length ? 'transform:' + tf.join(' ') + ';' : '') + (extraStyle || '');
+// 卡面图统一生成（预览/画廊/详情三处共用）
+function faceImgTag(src, extraStyle) {
+  const style = (extraStyle || '');
   return '<img class="bcb-img" src="' + src + '" alt=""' + (style ? ' style="' + style + '"' : '') + '>';
 }
-// 翻转在「选图后的裁剪界面」里做（所见即所得），应用时烘焙进图片本身。
 // 有效期：月/年（MM/YY）—— 只允许数字，满4位自动加 /，只校验月份 1~12
 let bfExpBad = false;
 function bfExpKey(ev) {
@@ -2985,7 +2958,6 @@ function onBfFacePicked(ev) {
   rd.onload = () => {
     openCropEx(rd.result, 876, 540, (out) => {
       bfFace = out;
-      bfFlipH = false; bfFlipV = false;   // 方向已烘焙进图片本身，卡片不再叠加翻转
       bfPreview();
       showToast('已使用调整后的卡面图');
     });
@@ -3031,8 +3003,6 @@ function openBankForm(id) {
   // ① 新建第二张卡时预览永远显示旧图，选自带配色「看起来无效」（有图时配色被忽略）
   // ② 保存时第二张卡会错误继承上一张的卡面图
   bfFace = c ? (c.face || '') : '';
-  bfFlipH = c ? !!c.flipH : false;   // 翻转状态随卡片回填
-  bfFlipV = c ? !!c.flipV : false;
   document.getElementById('bankFormTitle').textContent = c ? '编辑银行卡' : '新建银行卡';
   document.getElementById('bfBank').value = c ? c.bank : '';
   document.getElementById('bfNum').value = c ? c.num.replace(/(\d{4})(?=\d)/g, '$1 ') : '';
@@ -3093,7 +3063,7 @@ function bfPreview() {
     type: bfTypeLabelOf(),
   };
   const pal = BANK_PALETTES[bfPal % BANK_PALETTES.length];
-  const faceImg = bfFace ? faceImgTag(bfFace, bfFlipH, bfFlipV) : '';
+  const faceImg = bfFace ? faceImgTag(bfFace) : '';
   const bg = bfFace ? '' : `background: linear-gradient(152deg, ${pal.a} 0%, ${pal.b} 62%, ${pal.c} 130%);`;
   box.innerHTML = `<div class="bcard2" style="${bg}">
     ${faceImg}<div class="bcb-ol"></div>
@@ -3121,7 +3091,6 @@ function saveBankForm() {
     cvv: document.getElementById('bfCvv').value.trim(),
     pal: bfPal,
     face: bfFace || null,
-    flipH: !!bfFlipH, flipV: !!bfFlipV,   // 卡面图翻转状态
     // 账单地址（选填，随卡片保存并随备份透传）
     addr: (document.getElementById('bfAddr') || { value: '' }).value.trim(),
     city: (document.getElementById('bfCity') || { value: '' }).value.trim(),

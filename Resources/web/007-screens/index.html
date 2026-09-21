@@ -167,17 +167,7 @@
   /* 新建表单里的预览 + 配色选择 */
   .bf-preview { display: flex; justify-content: center; }
   .bf-preview .bcard2 { position: relative; left: 0; top: 0; margin: 0; width: 100%; height: 200px; border-radius: 14px; }
-  /* 裁剪界面：图片翻转（选图后调整时用） */
-  .crop-flip-row { display: flex; gap: 8px; margin: 10px 0 2px; }
-  .crop-flip {
-    flex: 1; height: 36px; border: 0.5px solid rgba(255,255,255,.18); border-radius: 11px;
-    background: rgba(255,255,255,.09); color: rgba(255,255,255,.9);
-    font-family: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
-    -webkit-tap-highlight-color: transparent;
-  }
-  .crop-flip:active { transform: scale(.96); background: rgba(255,255,255,.16); }
-  .crop-flip-hint { min-height: 14px; margin-top: 6px; text-align: center; font-size: 11.5px; color: rgba(255,255,255,.55); }
-  .bf-colors { display: flex; gap: 8px; flex-wrap: wrap; }
+    .bf-colors { display: flex; gap: 8px; flex-wrap: wrap; }
   .bf-color { width: 44px; height: 30px; border-radius: 9px; cursor: pointer; border: 2px solid transparent; box-shadow: 0 3px 10px rgba(0,0,0,.3); }
   .bf-color.on { border-color: #fff; }
   .bf-orgrow { display: flex; flex-direction: column; gap: 7px; }
@@ -1083,12 +1073,6 @@
         <input type="range" id="cropZoom" min="100" max="400" step="1" value="100" class="slider" oninput="zoomCrop(this.value)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/><path d="M8 11h6"/><path d="M11 8v6"/></svg>
       </div>
-      <div class="crop-flip-row">
-        <button class="crop-flip" onclick="cropFlip('h')">⇄ 水平翻转</button>
-        <button class="crop-flip" onclick="cropFlip('v')">⇅ 垂直翻转</button>
-        <button class="crop-flip" onclick="cropFlip('reset')">↺ 原方向</button>
-      </div>
-      <div class="crop-flip-hint" id="cropFlipHint"></div>
       <div class="crop-btns">
         <div class="cbtn sec" onclick="closeCrop()">取消</div>
         <div class="cbtn sec" onclick="resetCrop()">重置</div>
