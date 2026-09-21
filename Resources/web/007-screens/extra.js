@@ -1674,7 +1674,7 @@ function iosToPc(payload) {
   const dynTags = (payload.tags || []).filter(x => x && !x.fixed);
   return {
     app: 'FallVault',
-    version: '1.1.3',
+    version: '1.1.9',
     exportedAt: new Date().toISOString(),
     folders: [],
     tags: dynTags.map((x, i) => ({ id: i + 1, name: x.name || String(i), color: x.color || '#7DD3C0' })),
