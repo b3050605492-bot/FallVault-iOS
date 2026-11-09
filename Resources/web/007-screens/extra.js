@@ -878,9 +878,35 @@ const EYE = icon('eye', { w: 14 });
 const EYE_OFF = icon('eye-off', { w: 14 });
 const COPY = icon('copy', { w: 13 });
 
+// 稳定唯一 ID：标题可以重复（同名账号，例如 4 个「谷歌」），详情页必须按 uid 定位。
+// 以前按标题 findIndex，同名的账号全部落到第一条 —— 表现为「列表里各不一样，点进去全一样」。
+function newCardUid() {
+  return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+function ensureCardUids() {
+  let changed = false;
+  for (const c of CARDS) {
+    if (!c || typeof c !== 'object') continue;
+    if (!c.uid) { c.uid = newCardUid(); changed = true; }
+  }
+  return changed;
+}
+
+// 按 uid 打开详情（列表点击走这条）
+function openDetailById(uid) {
+  const idx = CARDS.findIndex(c => c && c.uid === uid);
+  if (idx < 0) return openDetail(uid);   // 兼容：万一传进来的还是标题
+  openDetailAt(idx);
+}
+
+// 兼容旧调用（按标题，取第一条）
 function openDetail(name) {
   const idx = CARDS.findIndex(c => c.t === name);
   if (idx < 0) return;
+  openDetailAt(idx);
+}
+
+function openDetailAt(idx) {
   currentIdx = idx;
   passShown = false;
   document.getElementById('detailScreen').classList.add('show');   // 立即显示（点击马上有反馈）
@@ -1070,6 +1096,7 @@ function loadCardsData() {
   try {
     const c = JSON.parse(localStorage.getItem('fvCards') || 'null');
     if (Array.isArray(c) && c.length && c[0] && c[0].t) { CARDS.length = 0; CARDS.push(...c); }
+    ensureCardUids();   // 老数据没有 uid：补上（同名账号才能各自打开详情）
     const t = JSON.parse(localStorage.getItem('fvTotp') || 'null');
     if (Array.isArray(t) && t.length) { TOTP_ITEMS.length = 0; TOTP_ITEMS.push(...t); }
   } catch (e) {}
@@ -1091,6 +1118,7 @@ function loadCardsData() {
         const useFile = Array.isArray(d.cards) && (fileTs >= localTs || !localTs);
         if (useFile) {
           CARDS.length = 0; CARDS.push(...d.cards);
+          ensureCardUids();                                     // 沙盒文件里的老数据同样补 uid
           TOTP_ITEMS.length = 0;
           TOTP_ITEMS.push(...(Array.isArray(d.totp) ? d.totp : []));
           if (d.wallState && d.wallState.type) {                // 壁纸类型随数据恢复
@@ -1112,10 +1140,13 @@ function loadCardsData() {
 }
 function delEntry() {
   if (currentIdx === null) return;
-  const name = CARDS[currentIdx].t;
+  const target = CARDS[currentIdx];
+  if (!target) return;
+  const name = target.t;
+  const totpKey = target.totp || '';
   CARDS.splice(currentIdx, 1);
-  // 同步移除验证码页对应项
-  const ti = (typeof TOTP_ITEMS !== 'undefined') ? TOTP_ITEMS.findIndex(x => x.t === name) : -1;
+  // 同步移除验证码页对应项：按 key 精确删（同名账号不能按标题删，会误删别人的 2FA）
+  const ti = (totpKey && typeof TOTP_ITEMS !== 'undefined') ? TOTP_ITEMS.findIndex(x => x.key === totpKey) : -1;
   if (ti >= 0) TOTP_ITEMS.splice(ti, 1);
   closeDetail();
   renderChips();
@@ -1266,6 +1297,7 @@ function saveEntry() {
   }
   if (editIdx === null) {
     data.c = COLORS[CARDS.length % COLORS.length];
+    data.uid = newCardUid();          // 唯一 ID：同名账号也能各自进自己的详情页
     CARDS.push(data);
       saveCardsData();
   showToast('已创建「' + name + '」');
@@ -2028,7 +2060,7 @@ function applyBackupData(data) {
         (x.t || '') === (c.t || '') && (x.user || '') === (c.user || '') &&
         (x.pass || '') === (c.pass || '') && (x.site || '') === (c.site || ''));
       if (dup) { skippedCards++; return; }
-      CARDS.push(c); addedCards++;
+      CARDS.push(c.uid ? c : Object.assign({}, c, { uid: newCardUid() })); addedCards++;
     });
   }
 

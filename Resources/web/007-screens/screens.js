@@ -647,14 +647,16 @@ function vsUpdate(trackId) {
 
 function renderCards(animate) {
   const box = document.getElementById('list');
+  if (typeof ensureCardUids === 'function') ensureCardUids();   // 老数据补 uid：同名账号才点得进各自详情
   const items = CARDS.filter(c => tagMatch(c) && matchText(c.t + ' ' + c.s))
     .sort((a, b) => (b.fav ? 1 : 0) - (a.fav ? 1 : 0));  // 收藏置顶（对标桌面版）
 
-  // FLIP ①：记录旧卡片纵向位置（按账号名作 key）
+  // FLIP ①：记录旧卡片纵向位置（按唯一 uid 作 key，同名账号不会互相错位）
   const oldTop = {};
   if (animate) {
     box.querySelectorAll('.card').forEach(el => {
-      if (el.dataset.t) oldTop[el.dataset.t] = el.getBoundingClientRect().top;
+      const k = el.dataset.uid || el.dataset.t;
+      if (k) oldTop[k] = el.getBoundingClientRect().top;
     });
   }
 
@@ -687,7 +689,7 @@ const star = c.fav ? icon('star', { w: 13, cls: 'fstar' }) : '';
         <button class="sw-btn sw-fav" onclick="swipeAct(event,${ci},'fav')" title="${c.fav ? '取消收藏' : '收藏'}">${icon('star', { w: 17 })}</button>
         <button class="sw-btn sw-edit" onclick="swipeAct(event,${ci},'edit')" title="编辑">${icon('pencil', { w: 17 })}</button>
       </div>
-      <div class="card" data-t="${esc(c.t)}" onclick="openDetail(${jsStr(c.t)})">
+      <div class="card" data-uid="${esc(c.uid || '')}" data-t="${esc(c.t)}" onclick="openDetailById(${jsStr(c.uid || c.t)})">
         ${ico}
         <div class="meta"><div class="t">${esc(c.t)}</div><div class="s">${esc(c.s)}</div></div>
         ${totp}
@@ -702,7 +704,7 @@ const star = c.fav ? icon('star', { w: 13, cls: 'fstar' }) : '';
   // FLIP ②：留存的卡片平滑滑到新位置；新出现的卡片交错入场
   if (animate) {
     box.querySelectorAll('.card').forEach((el, i) => {
-      const prev = oldTop[el.dataset.t];
+      const prev = oldTop[el.dataset.uid || el.dataset.t];
       if (prev != null) {
         const dy = prev - el.getBoundingClientRect().top;
         if (Math.abs(dy) > 1) {
@@ -915,8 +917,10 @@ function swipeAct(e, idx, act) {
   if (!c) return;
   if (act === 'del') {
     const name = c.t;
+    const totpKey = c.totp || '';
     CARDS.splice(idx, 1);
-    const ti = (typeof TOTP_ITEMS !== 'undefined') ? TOTP_ITEMS.findIndex(x => x.t === name) : -1;
+    // 按 key 精确删 2FA 条目：同名账号不能按标题删，否则会误删别人的验证码
+    const ti = (totpKey && typeof TOTP_ITEMS !== 'undefined') ? TOTP_ITEMS.findIndex(x => x.key === totpKey) : -1;
     if (ti >= 0) TOTP_ITEMS.splice(ti, 1);
     renderChips(); renderCards(); renderTags();
     if (typeof renderTOTP === 'function') renderTOTP();
