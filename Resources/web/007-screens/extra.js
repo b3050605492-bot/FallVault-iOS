@@ -1264,6 +1264,14 @@ function closeEditor() {
   document.getElementById('editorScreen').classList.remove('show');
 }
 
+// 2FA 输入规范化：链接（otpauth:// / otpauth-migration://）原样保存，纯密钥才去空格转大写。
+// 关键：迁移链接里的 base64 区分大小写，toUpperCase 会把 protobuf 改成乱码 → 解不出密钥 → 码全错。
+function normTotpSecret(raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (/^otpauth(-migration)?:\/\//i.test(s)) return s;
+  return s.replace(/\s+/g, '').toUpperCase();
+}
+
 function saveEntry() {
   const f = (id) => document.getElementById(id).value.trim();
   const name = f('fName');
@@ -1288,7 +1296,7 @@ function saveEntry() {
         if (k === 'secret') secret = decodeURIComponent(v || '');
       }
     }
-    secret = String(secret).replace(/\s+/g, '').toUpperCase();
+    secret = normTotpSecret(secret);   // 迁移链接原样存；纯密钥才转大写
     if (secret) {
       const key = 'k' + Date.now().toString(36);
       TOTP_ITEMS.push({ key, t: data.t, s: secret, c: (COLORS || [])[CARDS.length % 8], cat: data.cat || '未分类', fav: false, offset: 0 });
@@ -2300,10 +2308,23 @@ function exportTotp() {
 function importTotp() {
   const raw = document.getElementById('totpImportBox').value.trim();
   if (!raw) { showToast('请粘贴 otpauth:// 链接'); return; }
-  const lines = raw.split(/\s+/).filter(s => s.indexOf('otpauth://') === 0);
+  // 支持两种链接：单条 otpauth://totp/... 与 Google 导出的 otpauth-migration://offline?data=...
+  const lines = raw.split(/\s+/).filter(s => /^otpauth(-migration)?:\/\//i.test(s));
   if (!lines.length) { showToast('没有识别到有效的 otpauth:// 链接'); return; }
   let added = 0;
   lines.forEach(line => {
+    // 迁移链接：整条原样存（base64 区分大小写），运行期由 otpParams 解出真密钥
+    if (/^otpauth-migration:\/\//i.test(line)) {
+      const list = (typeof parseMigrationUri === 'function') ? parseMigrationUri(line) : [];
+      if (!list.length) return;                                   // 解不出就不存，避免又出现"码全错"
+      list.forEach(item => {
+        if (!item.secret) return;
+        if (TOTP_ITEMS.some(it => it.s === item.secret)) return;   // 密钥去重
+        const key = 'k' + Date.now().toString(36) + (added++).toString(36);
+        TOTP_ITEMS.push({ key, t: item.name || item.issuer || '验证码', s: item.secret, c: '#64D2FF', cat: '未分类', fav: false, offset: 0 });
+      });
+      return;
+    }
     const mURI = line.match(/otpauth:\/\/totp\/([^?]+)\?([^#\s]+)/i);
     if (!mURI) return;
     let label = '';
@@ -2313,7 +2334,7 @@ function importTotp() {
       const [k, v] = kv.split('=');
       if (k === 'secret') { try { secret = decodeURIComponent(v || ''); } catch (e) { secret = v || ''; } }
     }
-    secret = String(secret).replace(/\s+/g, '').toUpperCase();
+    secret = normTotpSecret(secret);   // 纯密钥才转大写
     if (!secret) return;
     if (TOTP_ITEMS.some(it => it.s === secret)) return;   // 密钥去重，避免重复导入
     const key = 'k' + Date.now().toString(36) + added.toString(36);

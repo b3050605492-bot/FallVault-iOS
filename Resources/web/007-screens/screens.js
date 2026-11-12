@@ -1084,9 +1084,10 @@ function otpParams(str) {
   // Google 迁移链接：解出第一条的真实密钥与参数
   if (/^otpauth-migration:\/\//i.test(raw)) {
     const list = parseMigrationUri(raw);
-    if (list.length) {
-      out = { secret: list[0].secret, algo: list[0].algo, digits: list[0].digits, period: list[0].period };
-    }
+    // 解不出来就别硬当 base32 用：否则会静默显示一个"看起来对、其实全错"的 6 位码
+    out = list.length
+      ? { secret: list[0].secret, algo: list[0].algo, digits: list[0].digits, period: list[0].period }
+      : { secret: '', algo: 'SHA-1', digits: 6, period: 30, broken: true };
     OTP_PARSE_CACHE[raw] = out;
     return out;
   }
